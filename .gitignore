@@ -1,0 +1,49 @@
+# Terraform / OpenTofu local artifacts
+.terraform/
+.terraform.lock.hcl
+.terraform.tfstate.lock.info
+
+# State and plan files (NEVER commit)
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+plan.tfplan
+plan.tfplan.*
+tfplan
+*.tfplan
+
+# Variable files with secrets (commit only *.tfvars.example)
+*.tfvars
+!*.tfvars.example
+!example.tfvars
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Local CLI config
+.terraformrc
+terraform.rc
+
+# SSH / PEM keys (defense in depth — Terraform should never generate these,
+# but in case they leak in via user_data)
+*.pem
+id_rsa
+id_ed25519
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Node (for any tooling)
+node_modules/
+
+# Logs
+*.log

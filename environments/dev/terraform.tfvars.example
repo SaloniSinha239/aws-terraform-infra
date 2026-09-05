@@ -1,0 +1,47 @@
+# Copy this file to `terraform.tfvars` and fill in real values.
+# `terraform.tfvars` is gitignored; never commit it.
+
+aws_region   = "us-east-1"
+environment  = "dev"
+project_name = "aws-iac-portfolio"
+owner        = "platform-team@example.com"
+
+# -- VPC ---------------------------------------------------------------------
+vpc_cidr              = "10.0.0.0/16"
+availability_zones    = ["us-east-1a", "us-east-1b"]
+public_subnet_cidrs   = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs  = ["10.0.10.0/24", "10.0.11.0/24"]
+
+# -- EC2 ---------------------------------------------------------------------
+# Name of an EXISTING EC2 Key Pair in the target region. The private key is
+# never created or stored by this repo. Create one with:
+#   aws ec2 create-key-pair --key-name dev-key --query 'KeyMaterial' --output text > dev-key.pem
+ec2_instance_type         = "t3.micro"
+ec2_key_pair_name         = "dev-key"
+# CRITICAL: narrow SSH to your own IP, NOT 0.0.0.0/0.
+ec2_ssh_cidr_blocks       = ["203.0.113.0/32"]
+ec2_ingress_cidr_blocks   = ["0.0.0.0/0"]
+ec2_root_volume_size_gb   = 20
+
+# -- S3 application bucket ---------------------------------------------------
+# Must be globally unique and DNS-compliant (lowercase, no underscores).
+app_bucket_name                        = "aws-iac-portfolio-dev-app-us-east-1-123456789012"
+app_bucket_force_destroy              = true # dev only; set false for prod
+app_bucket_glacier_transition_days    = 90
+app_bucket_noncurrent_expiration_days = 365
+
+# -- Monitoring --------------------------------------------------------------
+# REQUIRED. SNS will email a confirmation link you must click.
+alert_email                  = "alerts@example.com"
+billing_alarm_threshold_usd  = 25
+log_group_retention_days     = 30
+
+# -- GitHub Actions OIDC -----------------------------------------------------
+github_org     = "your-github-org"
+github_repo    = "aws-iac-portfolio"
+github_branches = ["main"]
+
+# Set true the first time you deploy this account. Set false thereafter
+# (and supply oidc_provider_arn) to avoid recreating an existing provider.
+create_github_oidc_provider = true
+oidc_provider_arn            = ""

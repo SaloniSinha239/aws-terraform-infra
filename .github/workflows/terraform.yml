@@ -1,0 +1,183 @@
+name: Terraform
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "environments/**"
+      - "modules/**"
+      - "bootstrap/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "environments/**"
+      - "modules/**"
+      - "bootstrap/**"
+      - ".github/workflows/terraform.yml"
+
+# Required permissions for OIDC + PR comments.
+permissions:
+  id-token: write   # required for aws-actions/configure-aws-credentials OIDC
+  contents: read    # required for actions/checkout
+  pull-requests: write # required to post plan comments on PRs
+
+env:
+  TF_VERSION: "1.10.5"
+  TF_ENVIRONMENT: dev
+  TF_DIR: environments/dev
+
+jobs:
+  fmt-and-validate:
+    name: fmt & validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform fmt -check (recursive)
+        run: terraform fmt -check -recursive
+
+      - name: terraform init (dev)
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate (dev)
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate -no-color
+
+      - name: terraform init (bootstrap)
+        working-directory: bootstrap
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate (bootstrap)
+        working-directory: bootstrap
+        run: terraform validate -no-color
+
+  plan:
+    name: plan (${{ env.TF_ENVIRONMENT }})
+    runs-on: ubuntu-latest
+    needs: fmt-and-validate
+    environment:
+      name: ${{ env.TF_ENVIRONMENT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          # Defense-in-depth: only allow this job to use the expected account.
+          # Set ${{ secrets.AWS_ACCOUNT_ID }} in the environment.
+          role-session-name: github-actions-terraform-plan
+          # Optional hardening:
+          # mask-saml-credentials: true
+
+      - name: terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+
+      - name: terraform plan
+        id: plan
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform plan -no-color -input=false -lock-timeout=300s -out=tfplan
+          echo "plan-file=tfplan" >> "$GITHUB_OUTPUT"
+
+      # Post plan as a PR comment (or run summary on push events).
+      - name: Post plan to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            const planFile = '${{ steps.plan.outputs.plan-file }}';
+            if (!planFile) {
+              core.warning('No plan file produced; skipping PR comment.');
+              return;
+            }
+            // Render plan to text
+            let body;
+            try {
+              body = execSync(`terraform show -no-color ${planFile}`, {
+                cwd: process.env.TF_DIR,
+                env: process.env,
+              }).toString();
+            } catch (e) {
+              body = `Could not render plan: ${e.message}`;
+            }
+            const truncated = body.length > 60000
+              ? body.slice(0, 60000) + '\n\n_…plan output truncated; full plan available in the workflow logs._'
+              : body;
+
+            const marker = `<!-- terraform-plan -->`;
+            const commentBody =
+              `${marker}\n### \`terraform plan\` — \`${{ env.TF_ENVIRONMENT }}\`\n` +
+              `Commit: \`${process.env.GITHUB_SHA}\`\n\n` +
+              '```\n' + truncated + '\n```\n';
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: commentBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: commentBody,
+              });
+            }
+
+  apply:
+    name: apply (${{ env.TF_ENVIRONMENT }})
+    runs-on: ubuntu-latest
+    needs: plan
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: ${{ env.TF_ENVIRONMENT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: github-actions-terraform-apply
+
+      - name: terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+
+      - name: terraform apply
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -auto-approve -input=false -lock-timeout=300s
